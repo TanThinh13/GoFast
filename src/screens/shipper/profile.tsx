@@ -438,6 +438,7 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     backgroundColor: '#f8f9fa',
     padding: 20,
+    marginTop : 20,
   },
   center: {
     flex: 1,

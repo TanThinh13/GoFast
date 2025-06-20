@@ -1,15 +1,16 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { View, StyleSheet, ActivityIndicator, Text, Image, TouchableOpacity, Alert, PermissionsAndroid, Platform, ScrollView } from 'react-native';
-import MapboxGL , {UserTrackingMode} from '@rnmapbox/maps';
+import { View, StyleSheet, ActivityIndicator, Text, Image, TouchableOpacity, Alert, PermissionsAndroid, Platform, ScrollView, Modal } from 'react-native'; // Import Modal
+import MapboxGL, { UserTrackingMode } from '@rnmapbox/maps';
 import { supabase } from '../../data/supabaseClient';
 import { getUserId } from '../../data/getUserData';
 import axios from 'axios';
 import Geolocation from 'react-native-geolocation-service';
+import Icon from 'react-native-vector-icons/Feather';
 
 
 
 // Cấu hình Mapbox
-const MAPBOX_ACCESS_TOKEN = '';
+const MAPBOX_ACCESS_TOKEN = 'pk.eyJ1IjoidGFudGhpbmgxMyIsImEiOiJjbWIxajVqN28wOHI2MnFwb3Q4dTE5YzRiIn0.YDm-TlsqGnraJ5q8CKYZvQ';
 MapboxGL.setAccessToken(MAPBOX_ACCESS_TOKEN);
 
 const warehouseIcon = require('../../../assets/warehouse.png');
@@ -36,6 +37,7 @@ type RoutePoint = {
     type: "warehouse" | "order" | "current_location";
     latitude: number;
     longitude: number;
+    order?: OrderFromDB; // Thêm trường này để lưu thông tin đơn hàng đầy đủ
 };
 
 type OptimizedRouteResponse = {
@@ -59,6 +61,7 @@ type RouteStep = {
         location: [number, number];
         type: string;
         instruction: string;
+        modifier?: string;
     };
     name: string;
 };
@@ -81,6 +84,12 @@ type UserLocationType = {
     speed: number | null;
     heading?: number | null;
 };
+const directionalKeywords = [
+    "lái xe hướng đông", "lái xe hướng tây", "lái xe về phía bắc", "lái xe về phía nam",
+    "lái xe hướng đông bắc", "lái xe hướng đông nam", "lái xe hướng tây bắc", "lái xe hướng tây nam",
+    "đi về phía bắc", "đi về phía nam", "đi về phía đông", "đi về phía tây", "tiếp tục",
+    'đi thẳng', 'tiếp tục', 'thẳng', 'trên đường', 'tiếp', 'continue', 'straight', 'depart'
+];
 
 
 const MapDeliveryScreen = () => {
@@ -91,6 +100,7 @@ const MapDeliveryScreen = () => {
     const [completedRoutes, setCompletedRoutes] = useState<RouteFeature[]>([]);
     const [currentStopIndex, setCurrentStopIndex] = useState(0);
     const [zoomLevel, setZoomLevel] = useState(14);
+    const [distanceRemainingForCurrentStep, setDistanceRemainingForCurrentStep] = useState<number | null>(null);
 
     // Sử dụng useRef thay cho useState để đánh dấu việc fetch ban đầu
     const hasFetchedInitialRouteRef = useRef(false);
@@ -109,6 +119,11 @@ const MapDeliveryScreen = () => {
     const cameraRef = useRef<MapboxGL.Camera>(null);
     const watchIdRef = useRef<number | null>(null);
     const scrollViewRef = useRef<ScrollView>(null);
+
+    // --- State cho Modal thông tin đơn hàng ---
+    const [selectedOrder, setSelectedOrder] = useState<OrderFromDB | null>(null);
+    const [showOrderModal, setShowOrderModal] = useState(false);
+
 
     // --- Hàm yêu cầu quyền vị trí (Chỉ Android) ---
     const requestLocationPermission = useCallback(async (): Promise<boolean> => {
@@ -239,7 +254,7 @@ const MapDeliveryScreen = () => {
                 current_longitude: currentLon,
             });
 
-            console.log("Optimized Route Response:", JSON.stringify(response.data, null, 2));
+            // console.log("Optimized Route Response:", JSON.stringify(response.data, null, 2));
             return response.data;
         } catch (error) {
             console.error("Lỗi khi gọi API tối ưu lộ trình:", error);
@@ -259,7 +274,7 @@ const MapDeliveryScreen = () => {
             const data = await response.json();
             if (data.routes?.length) {
                 const route = data.routes[0];
-                return {
+                const result: RouteFeature = { // Đảm bảo kiểu RouteFeature được định nghĩa chính xác
                     type: 'Feature',
                     properties: {
                         routeId: segmentId,
@@ -267,6 +282,9 @@ const MapDeliveryScreen = () => {
                     },
                     geometry: route.geometry
                 };
+                // --- DÒNG NÀY SẼ IN KẾT QUẢ ĐÃ ĐƯỢC XỬ LÝ RA CONSOLE ---
+                console.log('Đã xử lý RouteFeature cho segment', segmentId, ':', JSON.stringify(result, null, 2));
+                return result;
             }
             console.warn(`Mapbox Directions API returned no routes for segment ${segmentId}.`);
             return null;
@@ -328,11 +346,19 @@ const MapDeliveryScreen = () => {
             const optimizedResponse = await optimizeRouteWithBackend(ordersForBackend, startLat, startLon);
 
             if (optimizedResponse && optimizedResponse.optimized_route.length > 0) {
-                setOptimizedPoints(optimizedResponse.optimized_route);
+                // Đảm bảo thông tin order được truyền vào optimizedPoints
+                const updatedOptimizedPoints: RoutePoint[] = optimizedResponse.optimized_route.map(rp => {
+                    if (rp.type === 'order') {
+                        const originalOrder = fetchedOrders.find(fo => fo.id === rp.id);
+                        return { ...rp, order: originalOrder };
+                    }
+                    return rp;
+                });
+                setOptimizedPoints(updatedOptimizedPoints);
                 setCurrentStopIndex(0);
 
-                const startPoint = optimizedResponse.optimized_route[0];
-                const endPoint = optimizedResponse.optimized_route[1];
+                const startPoint = updatedOptimizedPoints[0];
+                const endPoint = updatedOptimizedPoints[1];
 
                 if (startPoint && endPoint) {
                     const initialRouteSegment = await fetchSegmentRouteWithSteps(
@@ -343,15 +369,15 @@ const MapDeliveryScreen = () => {
                     setCurrentRoute(initialRouteSegment);
                     setCurrentRouteSteps(initialRouteSegment?.properties.steps || []);
                     setCurrentStepIndex(0);
-                } else if (optimizedResponse.optimized_route.length === 1) {
+                } else if (updatedOptimizedPoints.length === 1) {
                     Alert.alert("Thông báo", "Chỉ có vị trí hiện tại trong lộ trình tối ưu, không có đơn hàng nào.");
                     setCurrentRoute(null);
                     setCurrentRouteSteps([]);
                     setCurrentStepIndex(0);
                 }
 
-                const allLons = optimizedResponse.optimized_route.map(p => p.longitude);
-                const allLats = optimizedResponse.optimized_route.map(p => p.latitude);
+                const allLons = updatedOptimizedPoints.map(p => p.longitude);
+                const allLats = updatedOptimizedPoints.map(p => p.latitude);
 
                 if (allLons.length > 0 && allLats.length > 0) {
                     cameraRef.current?.fitBounds(
@@ -471,6 +497,24 @@ const MapDeliveryScreen = () => {
         }
     };
 
+    // --- Hàm xử lý khi nhấn vào Callout ---
+    const handleCalloutPress = (point: RoutePoint) => {
+        if (point.type === 'order' && point.order) {
+            setSelectedOrder(point.order);
+            setShowOrderModal(true);
+        } else {
+            // Có thể thêm logic xử lý cho warehouse/current_location nếu cần
+            setSelectedOrder(null);
+            setShowOrderModal(false);
+        }
+    };
+
+    // --- Hàm đóng Modal ---
+    const handleCloseModal = () => {
+        setShowOrderModal(false);
+        setSelectedOrder(null);
+    };
+
 
     // --- Effect để bắt đầu theo dõi vị trí (chỉ Android) ---
     useEffect(() => {
@@ -505,39 +549,21 @@ const MapDeliveryScreen = () => {
 
     }, [initDeliveryProcess]); // Dependencies chỉ bao gồm initDeliveryProcess (là một hàm ổn định)
 
-
-    // --- Effect để điều khiển Camera theo vị trí người dùng (Chỉ Android) ---
     useEffect(() => {
-        if (Platform.OS === 'android' && userLocation && isFollowingUser && cameraRef.current) {
-            cameraRef.current.setCamera({
-                centerCoordinate: [userLocation.longitude, userLocation.latitude],
-                zoomLevel: zoomLevel,
-                pitch: 45,
-                heading: userLocation.heading || 0,
-                animationMode: "easeTo",
-                animationDuration: 1000
-            });
-        }
-    }, [userLocation, isFollowingUser, zoomLevel]);
-
-    // --- Effect để tự động chuyển bước hướng dẫn ---
-    useEffect(() => {
-        // Sử dụng userLocationRef.current cho tính toán khoảng cách để tránh re-render không cần thiết
-        // cho ETA và chuyển bước hướng dẫn.
         const currentLoc = userLocationRef.current;
         if (!currentLoc || currentRouteSteps.length === 0) {
+            setDistanceRemainingForCurrentStep(null);
             return;
         }
 
         const currentStep = currentRouteSteps[currentStepIndex];
         if (!currentStep || !currentStep.maneuver) {
+            setDistanceRemainingForCurrentStep(null);
             return;
         }
 
-        const stepEndCoords = currentStep.maneuver.location;
-
         const haversineDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
-            const R = 6371e3;
+            const R = 6371e3; // metres
             const φ1 = lat1 * Math.PI / 180;
             const φ2 = lat2 * Math.PI / 180;
             const Δφ = (lat2 - lat1) * Math.PI / 180;
@@ -550,27 +576,99 @@ const MapDeliveryScreen = () => {
 
             return R * c;
         };
-
-        const distanceToNextManeuver = haversineDistance(
-            currentLoc.latitude, currentLoc.longitude, // Sử dụng currentLoc từ ref
-            stepEndCoords[1], stepEndCoords[0]
-        );
-
-        const threshold = 20;
-
-        if (distanceToNextManeuver < threshold && currentStepIndex < currentRouteSteps.length - 1) {
-            console.log(`Đã đến gần điểm rẽ (còn ${distanceToNextManeuver.toFixed(2)}m), chuyển sang bước tiếp theo.`);
-            setCurrentStepIndex(prevIndex => prevIndex + 1);
-        } else if (distanceToNextManeuver < threshold && currentStepIndex === currentRouteSteps.length - 1) {
-            console.log("Đã đến điểm cuối của chặng đường hiện tại.");
+        // Tính khoảng cách còn lại trên bước HIỆN TẠI (đến điểm cuối của geometry)
+        let currentStepEndCoordinate: [number, number] | null = null;
+        if (currentStep.geometry && currentStep.geometry.coordinates && currentStep.geometry.coordinates.length > 0) {
+            currentStepEndCoordinate = currentStep.geometry.coordinates[currentStep.geometry.coordinates.length - 1] as [number, number];
         }
+        let calculatedDistanceRemaining = Infinity;
+        if (currentStepEndCoordinate) {
+            calculatedDistanceRemaining = haversineDistance(
+                currentLoc.latitude, currentLoc.longitude,
+                currentStepEndCoordinate[1], currentStepEndCoordinate[0]
+            );
+        }
+        setDistanceRemainingForCurrentStep(calculatedDistanceRemaining);
+
+
+        // Tính khoảng cách đến điểm thao tác của BƯỚC TIẾP THEO (dùng để chuyển bước chính)
+        let distanceToNextManeuverPointForDisplay = Infinity;
+        if (currentStepIndex < currentRouteSteps.length - 1) {
+            const nextStep = currentRouteSteps[currentStepIndex + 1];
+            if (nextStep && nextStep.maneuver) {
+                distanceToNextManeuverPointForDisplay = haversineDistance(
+                    currentLoc.latitude, currentLoc.longitude,
+                    nextStep.maneuver.location[1], nextStep.maneuver.location[0]
+                );
+            }
+        }
+
+        console.log(`Bước hiện tại: ${currentStepIndex}, Hướng dẫn: ${currentStep.maneuver.instruction}`);
+        console.log(`Khoảng cách đến điểm rẽ tiếp theo (chuyển bước): ${distanceToNextManeuverPointForDisplay.toFixed(2)}m`);
+        console.log(`Khoảng cách còn lại trên bước hiện tại (để hiển thị): ${calculatedDistanceRemaining.toFixed(2)}m`);
+
+
+        const transitionThreshold = 15; // Ngưỡng chính để chuyển sang bước tiếp theo (điểm rẽ)
+        const postTurnTransitionThreshold = 10; // Ngưỡng phụ để chuyển qua bước rẽ đã hoàn thành (khoảng 10m sau điểm rẽ)
+
+
+        // 1. Logic chuyển bước chính (khi đến gần điểm rẽ)
+        if (currentStepIndex < currentRouteSteps.length - 1) {
+            if (distanceToNextManeuverPointForDisplay < transitionThreshold) {
+                console.log(`Đã đến gần điểm rẽ (còn ${distanceToNextManeuverPointForDisplay.toFixed(2)}m), chuyển sang bước tiếp theo.`);
+                setCurrentStepIndex(prevIndex => prevIndex + 1);
+            }
+        }
+
+        // 2. **Logic mới: "Bỏ qua" bước rẽ đã hoàn thành**
+        // Điều này áp dụng khi currentStep là một bước rẽ VÀ người dùng đã đi qua điểm rẽ một đoạn.
+        // Mục tiêu là hiển thị hướng dẫn đi thẳng SAU KHI rẽ một cách nhanh chóng.
+        const isCurrentStepTurnManeuver = ['turn', 'fork', 'exit roundabout', 'exit', 'ramp', 'merge', 'roundabout'].includes(currentStep.maneuver.type);
+
+        if (isCurrentStepTurnManeuver && currentStepIndex < currentRouteSteps.length - 1) {
+            // Tính khoảng cách từ người dùng đến điểm *bắt đầu* của thao tác rẽ hiện tại
+            const distanceToCurrentManeuverLocation = haversineDistance(
+                currentLoc.latitude, currentLoc.longitude,
+                currentStep.maneuver.location[1], currentStep.maneuver.location[0]
+            );
+
+            // Nếu người dùng đã đi qua điểm thao tác rẽ một đoạn (vd: > 10m)
+            // và hướng dẫn tiếp theo là một hướng dẫn đi thẳng.
+            // Điều kiện `distanceToCurrentManeuverLocation > postTurnTransitionThreshold` có thể không chính xác
+            // nếu người dùng đi lùi hoặc lệch.
+            // Cách tốt hơn là kiểm tra xem người dùng đã nằm trên đoạn đường của bước tiếp theo (đi thẳng) chưa.
+            // Tuy nhiên, để đơn giản hóa, ta sẽ dùng ngưỡng khoảng cách.
+
+            // Nếu người dùng đã "vượt qua" điểm maneuver của bước rẽ hiện tại một chút (VD: 10m)
+            // và bước tiếp theo là bước đi thẳng.
+            // Đây là một heuristic: nếu khoảng cách tới maneuver của bước HIỆN TẠI bắt đầu TĂNG lên đáng kể
+            // (nghĩa là đã đi qua nó), HOẶC đã đi được N mét trên geometry của currentStep.
+            // Để đơn giản, ta sẽ dùng khoảng cách tới điểm kết thúc của step rẽ.
+            if (calculatedDistanceRemaining < postTurnTransitionThreshold && currentStepIndex + 1 < currentRouteSteps.length) {
+                const nextStep = currentRouteSteps[currentStepIndex + 1];
+                const isNextStepStraight = ['continue', 'new name'].includes(nextStep.maneuver.type) ||
+                    directionalKeywords.some(keyword => nextStep.maneuver.instruction.toLowerCase().includes(keyword));
+
+                if (isNextStepStraight) {
+                    console.log(`Đã hoàn thành thao tác rẽ, chuyển sang hướng dẫn đi thẳng: ${nextStep.maneuver.instruction}`);
+                    setCurrentStepIndex(prevIndex => prevIndex + 1);
+                }
+            }
+        }
+
+        // Xử lý cuối chặng (giữ nguyên)
+        else if (currentStepIndex === currentRouteSteps.length - 1) {
+            if (calculatedDistanceRemaining < transitionThreshold) {
+                console.log("Đã đến điểm cuối của chặng đường hiện tại.");
+            }
+        }
+
     }, [userLocation, currentRouteSteps, currentStepIndex]); // Vẫn giữ userLocation ở đây vì nó cập nhật UI camera và các phần khác
 
-    // Effect để cuộn ScrollView đến bước hiện tại
     useEffect(() => {
         if (scrollViewRef.current && currentRouteSteps.length > 0) {
-            const itemHeight = 30;
-            const scrollOffset = currentStepIndex * itemHeight;
+            const itemHeight = 35; // Ước tính chiều cao của mỗi item hướng dẫn (quan trọng để cuộn đúng)
+            const scrollOffset = Math.max(0, (currentStepIndex * itemHeight));
             scrollViewRef.current.scrollTo({ y: scrollOffset, animated: true });
         }
     }, [currentStepIndex, currentRouteSteps]);
@@ -592,7 +690,7 @@ const MapDeliveryScreen = () => {
         }
         return `${orderSequence}`;
     };
-return (
+    return (
         <View style={styles.container}>
             <MapboxGL.MapView
                 style={styles.map}
@@ -643,6 +741,7 @@ return (
                             key={`optimized-point-${index}`}
                             id={`optimized-point-${index}`}
                             coordinate={[point.longitude, point.latitude]}
+                            onSelected={() => handleCalloutPress(point)}
                         >
                             <View style={[
                                 styles.orderMarker,
@@ -650,20 +749,10 @@ return (
                                 isCurrentStop && styles.currentMarker,
                                 isCompleted && styles.completedMarker
                             ]}>
-                                <Text style={[
-                                    styles.markerText,
-                                    (isCurrentStop || isCompleted) && { color: 'white' }
-                                ]}>
-                                    {getMarkerLabel(point, index)}
-                                </Text>
+                                <Icon name="package" size={40} color="#3b82f6" />
                             </View>
-                            <MapboxGL.Callout
-                                title={
-                                    point.type === 'warehouse' ? 'Kho hàng' :
-                                    point.type === 'current_location' ? 'Vị trí hiện tại' :
-                                    `Điểm giao ${getMarkerLabel(point, index)}`
-                                }
-                            />
+                            <MapboxGL.Callout title={`Điểm ${index} - Đơn hàng ${point.id}`}>
+                            </MapboxGL.Callout>
                         </MapboxGL.PointAnnotation>
                     );
                 })}
@@ -761,22 +850,93 @@ return (
                 <View style={styles.turnByTurnOverlay}>
                     <Text style={styles.turnByTurnTitle}>Hướng dẫn:</Text>
                     <ScrollView ref={scrollViewRef} style={styles.instructionsScrollView}>
-                        {currentRouteSteps.map((step, index) => (
-                            <View
-                                key={`step-${index}`}
-                                style={[
-                                    styles.instructionItem,
-                                    index === currentStepIndex ? styles.currentInstructionItem : null
-                                ]}
-                            >
-                                <Text style={[
-                                    styles.instructionText,
-                                    index === currentStepIndex ? styles.currentInstructionText : null
-                                ]}>
-                                    {index + 1}. {step.maneuver.instruction}
-                                </Text>
-                            </View>
-                        ))}
+                        {currentRouteSteps.map((step, index) => {
+                            // Bắt đầu với hướng dẫn gốc từ Mapbox. Chúng ta sẽ sửa đổi nó sau nếu cần.
+                            let instructionText = step.maneuver.instruction;
+                            const roadName = step.name || 'này'; // Tên đường từ bước hiện tại
+                            let displayDistance = Math.round(step.distance); // Khoảng cách của BƯỚC HIỆN TẠI
+
+                            // Cập nhật khoảng cách còn lại cho bước hiện tại đang hoạt động
+                            if (index === currentStepIndex && distanceRemainingForCurrentStep !== null && distanceRemainingForCurrentStep > 0) {
+                                displayDistance = Math.max(0, Math.round(distanceRemainingForCurrentStep)); // Đảm bảo không âm
+                            }
+
+                            const maneuverType = step.maneuver?.type?.toLowerCase() || '';
+                            const maneuverModifier = step.maneuver?.modifier?.toLowerCase() || '';
+
+                            // Xử lý các thao tác liên quan đến rẽ (rẽ, vòng xuyến, ngã ba, đường dốc, nhập làn)
+                            if (maneuverType.includes('turn') || maneuverType.includes('rotary') || maneuverType.includes('roundabout') || maneuverType.includes('fork') || maneuverType.includes('ramp') || maneuverType.includes('merge')) {
+                                // Lấy hướng dẫn gốc từ Mapbox và loại bỏ dấu chấm cuối cùng nếu có, để dễ nối chuỗi
+                                let turnActionText = '';
+                                // Xây dựng hành động rẽ chính từ modifier
+                                if (maneuverModifier.includes('left')) {
+                                    turnActionText = 'Rẽ trái';
+                                } else if (maneuverModifier.includes('right')) {
+                                    turnActionText = 'Rẽ phải';
+                                } else if (maneuverModifier.includes('sharp left')) {
+                                    turnActionText = 'Rẽ ngoặt trái';
+                                } else if (maneuverModifier.includes('sharp right')) {
+                                    turnActionText = 'Rẽ ngoặt phải';
+                                } else if (maneuverModifier.includes('slight left')) {
+                                    turnActionText = 'Rẽ hơi trái';
+                                } else if (maneuverModifier.includes('slight right')) {
+                                    turnActionText = 'Rẽ hơi phải';
+                                } else if (maneuverModifier.includes('uturn')) {
+                                    turnActionText = 'quay đầu';
+                                } else {
+                                    // Mặc định nếu không có modifier cụ thể
+                                    turnActionText = 'Rẽ';
+                                }
+                                // Nối thêm khoảng cách của CHÍNH BƯỚC NÀY vào hướng dẫn
+                                instructionText = `${turnActionText} sang Đường ${roadName} sau đó đi thẳng ${displayDistance}m`;
+
+                                const nextStep = currentRouteSteps[index + 1];
+                                // Kiểm tra xem bước tiếp theo có tồn tại, có phải là loại 'đi thẳng'/'tiếp tục' VÀ CÓ TRÊN CÙNG ĐƯỜNG với bước hiện tại không
+                                if (nextStep && (['continue', 'new name', 'straight', 'depart'].includes(nextStep.maneuver.type) ||
+                                    directionalKeywords.some(keyword => nextStep.maneuver.instruction.toLowerCase().includes(keyword))) &&
+                                    nextStep.name === step.name // Đảm bảo là cùng một con đường
+                                ) {
+                                    const nextRoadName = nextStep.name; // Tên đường sẽ giống với step.name
+                                    const nextDistance = Math.round(nextStep.distance); // Khoảng cách của bước tiếp theo
+
+                                    // Nối thêm hướng dẫn tiếp tục đi thẳng
+                                    instructionText += `, sau đó đi thẳng trên Đường ${nextRoadName} khoảng ${nextDistance}m`;
+                                }
+                            }
+                            // Xử lý các thao tác đi thẳng (giữ nguyên logic trước đó)
+                            else {
+                                const isDirectionalInstruction = directionalKeywords.some(keyword =>
+                                    instructionText.toLowerCase().includes(keyword)
+                                );
+                                const isStraightManeuverType = ['depart', 'continue', 'new name', 'straight'].includes(maneuverType);
+
+                                if (isDirectionalInstruction || isStraightManeuverType) {
+                                    // Đối với bước hiện tại, hiển thị khoảng cách còn lại. Đối với các bước khác, hiển thị tổng khoảng cách.
+                                    if (index === currentStepIndex && distanceRemainingForCurrentStep !== null && distanceRemainingForCurrentStep > 0) {
+                                        instructionText = `Đi thẳng ${displayDistance}m trên Đường ${roadName}`;
+                                    } else {
+                                        instructionText = `Đi thẳng khoảng ${displayDistance}m trên Đường ${roadName}`;
+                                    }
+                                }
+                            }
+
+                            return (
+                                <View
+                                    key={`step-${index}`}
+                                    style={[
+                                        styles.instructionItem,
+                                        index === currentStepIndex ? styles.currentInstructionItem : null
+                                    ]}
+                                >
+                                    <Text style={[
+                                        styles.instructionText,
+                                        index === currentStepIndex ? styles.currentInstructionText : null
+                                    ]}>
+                                        {index + 1}. {instructionText}
+                                    </Text>
+                                </View>
+                            );
+                        })}
                     </ScrollView>
                 </View>
             )}
@@ -788,6 +948,33 @@ return (
                     <Text style={styles.loadingText}>Đang tải lộ trình...</Text>
                 </View>
             )}
+
+            {/* Order Details Modal */}
+            <Modal
+                animationType="slide"
+                transparent={true}
+                visible={showOrderModal}
+                onRequestClose={handleCloseModal} // Để đóng modal khi nhấn nút back trên Android
+            >
+                <View style={styles.modalOverlay}>
+                    <View style={styles.modalContent}>
+                        <Text style={styles.modalTitle}>Thông tin đơn hàng</Text>
+                        {selectedOrder ? (
+                            <>
+                                <Text style={styles.modalText}>Mã đơn: {selectedOrder.id}</Text>
+                                <Text style={styles.modalText}>Địa chỉ: {selectedOrder.delivery_address}</Text>
+                                <Text style={styles.modalText}>Khối lượng: {selectedOrder.weight} kg</Text>
+                                {/* Thêm các chi tiết khác của đơn hàng nếu có trong kiểu OrderFromDB */}
+                            </>
+                        ) : (
+                            <Text style={styles.modalText}>Không có thông tin đơn hàng.</Text>
+                        )}
+                        <TouchableOpacity style={styles.closeButton} onPress={handleCloseModal}>
+                            <Text style={styles.closeButtonText}>Đóng</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </Modal>
         </View>
     );
 };
@@ -795,6 +982,7 @@ return (
 const styles = StyleSheet.create({
     container: {
         flex: 1,
+        marginTop: 20,
         position: 'relative',
     },
     map: {
@@ -823,8 +1011,8 @@ const styles = StyleSheet.create({
         height: 24,
     },
     orderMarker: {
-        width: 28,
-        height: 28,
+        width: 50,
+        height: 50,
         borderRadius: 14,
         backgroundColor: '#e5e7eb',
         justifyContent: 'center',
@@ -973,6 +1161,50 @@ const styles = StyleSheet.create({
     currentInstructionText: {
         fontWeight: 'bold',
         fontSize: 15,
+    },
+    // Styles mới cho Modal
+    modalOverlay: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        backgroundColor: 'rgba(0, 0, 0, 0.5)', // Nền mờ
+    },
+    modalContent: {
+        backgroundColor: 'white',
+        borderRadius: 10,
+        padding: 20,
+        width: '80%',
+        elevation: 10, // Android shadow
+        shadowColor: '#000', // iOS shadow
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: 5,
+    },
+    modalTitle: {
+        fontSize: 20,
+        fontWeight: 'bold',
+        marginBottom: 15,
+        textAlign: 'center',
+        color: '#333',
+    },
+    modalText: {
+        fontSize: 16,
+        marginBottom: 8,
+        color: '#555',
+    },
+    closeButton: {
+        marginTop: 20,
+        backgroundColor: '#3B82F6',
+        padding: 12,
+        borderRadius: 8,
+        alignSelf: 'center', // Canh giữa nút
+        width: '50%',
+    },
+    closeButtonText: {
+        color: 'white',
+        fontSize: 16,
+        fontWeight: 'bold',
+        textAlign: 'center',
     },
 });
 

@@ -1,17 +1,23 @@
 import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import Ionicons from 'react-native-vector-icons/Ionicons'; // Import Ionicons từ react-native-vector-icons
+import Ionicons from 'react-native-vector-icons/Ionicons';
+
+// Import useSafeAreaInsets
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // Import các màn hình Admin
 import DashboardScreen from '../screens/admin/dashboard';
 import OrdersScreen from '../screens/admin/orders';
 import ShippersScreen from '../screens/admin/shippers';
-import ProfileScreen from '../screens/admin/profile'; // Profile có thể dùng chung
-import { Platform } from 'react-native';
+import ProfileScreen from '../screens/admin/profile';
+
 
 const AdminTab = createBottomTabNavigator();
 
 export default function AdminTabNavigator() {
+  // Lấy các giá trị insets (khoảng cách đệm) an toàn của thiết bị
+  const insets = useSafeAreaInsets(); // <--- Gọi hook này
+
   return (
     <AdminTab.Navigator
       screenOptions={({ route }) => ({
@@ -31,14 +37,16 @@ export default function AdminTabNavigator() {
           return <Ionicons name={iconName} size={size} color={color} />;
         },
         tabBarActiveTintColor: '#007AFF', 
-        tabBarInactiveTintColor: 'gray',   
+        tabBarInactiveTintColor: 'gray',   
         tabBarLabelStyle: {
           fontSize: 12,
           fontWeight: 'bold', 
           paddingBottom: 2, 
         },
         tabBarStyle: {
-          height: 55, 
+          height: 55 + insets.bottom, // <--- Cộng thêm giá trị insets.bottom
+          paddingBottom: insets.bottom, // <--- Thêm paddingBottom chính xác
+          // backgroundColor: 'white', // Thêm màu nền để dễ nhìn thấy padding
         }
       })}
     >

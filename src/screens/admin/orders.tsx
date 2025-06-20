@@ -57,7 +57,7 @@ interface GeocodingResult {
 
 // Đảm bảo MapboxGL.setAccessToken chỉ được gọi một lần và trước khi sử dụng Mapbox
 // MapboxGL.MapView vẫn cần access token này để hiển thị bản đồ
-MapboxGL.setAccessToken('');
+MapboxGL.setAccessToken('pk.eyJ1IjoidGFudGhpbmgxMyIsImEiOiJjbWIxajVqN28wOHI2MnFwb3Q4dTE5YzRiIn0.YDm-TlsqGnraJ5q8CKYZvQ');
 
 export default function OrdersScreen() {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -1032,6 +1032,7 @@ const styles = StyleSheet.create({
     flex: 1,
     padding: 16,
     backgroundColor: '#f8f8f8',
+    marginTop : 20,
   },
   header: {
     fontSize: 28,

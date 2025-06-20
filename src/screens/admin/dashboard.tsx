@@ -233,6 +233,7 @@ const styles = StyleSheet.create({
     flex: 1,
     padding: 16,
     backgroundColor: '#F8FAFC', // nền sáng nhẹ
+    marginTop : 20,
   },
   center: {
     flex: 1,

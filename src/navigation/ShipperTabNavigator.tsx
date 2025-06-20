@@ -2,6 +2,7 @@
 import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import Ionicons from 'react-native-vector-icons/Ionicons'; // Import Ionicons từ react-native-vector-icons
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // Import các màn hình Shipper
 import DashboardScreen from '../screens/shipper/dashboard'; // Có thể dùng chung hoặc tạo riêng cho shipper
@@ -12,6 +13,7 @@ import MapScreen from '../screens/shipper/map'; // Giả định shipper có mà
 const ShipperTab = createBottomTabNavigator();
 
 export default function ShipperTabNavigator() {
+  const insets = useSafeAreaInsets();
   return (
     <ShipperTab.Navigator
       screenOptions={({ route }) => ({
@@ -25,7 +27,7 @@ export default function ShipperTabNavigator() {
           } else if (route.name === 'HistoryTab') {
             iconName = 'time-outline';
           }
-           else if (route.name === 'ShipperProfileTab') {
+          else if (route.name === 'ShipperProfileTab') {
             iconName = 'person-circle-outline';
           }
           // @ts-ignore
@@ -33,13 +35,14 @@ export default function ShipperTabNavigator() {
         },
         tabBarActiveTintColor: '#007AFF',
         tabBarInactiveTintColor: 'gray',
-         tabBarLabelStyle: {
+        tabBarLabelStyle: {
           fontSize: 12,
-          fontWeight: 'bold', 
-          paddingBottom: 2, 
+          fontWeight: 'bold',
+          paddingBottom: 2,
         },
         tabBarStyle: {
-          height: 55, 
+          height: 55 + insets.bottom, // <--- Cộng thêm giá trị insets.bottom
+          paddingBottom: insets.bottom, // <--- Thêm paddingBottom chính xác
         }
       })}
     >

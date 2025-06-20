@@ -386,6 +386,7 @@ const styles = StyleSheet.create({
     flex: 1,
     padding: 16,
     backgroundColor: '#f2f2f2',
+    marginTop : 20,
   },
   loadingOverlay: {
     ...StyleSheet.absoluteFillObject,
