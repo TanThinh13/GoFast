@@ -1,131 +1,115 @@
-/**
- * Sample React Native App
- * https://github.com/facebook/react-native
- *
- * @format
- */
+// GoFastBare/App.tsx
+import React, { useState, useEffect } from 'react';
+import { ActivityIndicator, View, StyleSheet, LogBox } from 'react-native';
+import { NavigationContainer } from '@react-navigation/native';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { supabase } from './src/data/supabaseClient'; 
+import { getUserId } from './src/data/getUserData';
 
-import React from 'react';
-import type {PropsWithChildren} from 'react';
-import {
-  ScrollView,
-  StatusBar,
-  StyleSheet,
-  Text,
-  useColorScheme,
-  View,
-} from 'react-native';
+// Screens
+import LoginScreen from './src/screens/login';
+import ShipperDetailScreen from './src/screens/admin/shipperDetail';
 
-import {
-  Colors,
-  DebugInstructions,
-  Header,
-  LearnMoreLinks,
-  ReloadInstructions,
-} from 'react-native/Libraries/NewAppScreen';
+// Tab Navigators
+import AdminTabNavigator from './src/navigation/AdminTabNavigator';
+import ShipperTabNavigator from './src/navigation/ShipperTabNavigator';
 
-type SectionProps = PropsWithChildren<{
-  title: string;
-}>;
+const RootStack = createNativeStackNavigator();
 
-function Section({children, title}: SectionProps): React.JSX.Element {
-  const isDarkMode = useColorScheme() === 'dark';
+export default function App() {
+  const [initialRoute, setInitialRoute] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    LogBox.ignoreLogs([
+      'AsyncStorage has been extracted from react-native core',
+      'Non-serializable values were found in the navigation state',
+    ]);
+
+    const checkAuthAndRole = async () => {
+      try {
+        const userId = await getUserId();
+        if (!userId) {
+          console.log('Không có userId trong storage. Chuyển về đăng nhập.');
+          setInitialRoute('Login');
+          return;
+        }
+
+        const { data, error } = await supabase
+          .from('Users')
+          .select('role')
+          .eq('id', userId)
+          .single();
+
+        if (error || !data) {
+          console.error('Lỗi khi lấy vai trò người dùng:', error?.message);
+          setInitialRoute('Login');
+          return;
+        }
+
+        if (data.role === 'admin') {
+          setInitialRoute('AdminApp');
+        } else if (data.role === 'shipper') {
+          setInitialRoute('ShipperApp');
+        } else {
+          console.warn('Vai trò người dùng không xác định:', data.role);
+          setInitialRoute('Login');
+        }
+      } catch (e) {
+        console.error('Lỗi trong quá trình kiểm tra xác thực:', e);
+        setInitialRoute('Login');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    const { data: authListener } = supabase.auth.onAuthStateChange(
+      async (event) => {
+        if (event === 'SIGNED_OUT') {
+          setInitialRoute('Login');
+          setLoading(false);
+        } else if (event === 'SIGNED_IN') {
+          await checkAuthAndRole();
+        }
+      }
+    );
+
+    checkAuthAndRole();
+
+    return () => {
+      authListener?.subscription.unsubscribe();
+    };
+  }, []);
+
+  if (loading || initialRoute === null) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#007AFF" />
+      </View>
+    );
+  }
+
   return (
-    <View style={styles.sectionContainer}>
-      <Text
-        style={[
-          styles.sectionTitle,
-          {
-            color: isDarkMode ? Colors.white : Colors.black,
-          },
-        ]}>
-        {title}
-      </Text>
-      <Text
-        style={[
-          styles.sectionDescription,
-          {
-            color: isDarkMode ? Colors.light : Colors.dark,
-          },
-        ]}>
-        {children}
-      </Text>
-    </View>
-  );
-}
-
-function App(): React.JSX.Element {
-  const isDarkMode = useColorScheme() === 'dark';
-
-  const backgroundStyle = {
-    backgroundColor: isDarkMode ? Colors.darker : Colors.lighter,
-  };
-
-  /*
-   * To keep the template simple and small we're adding padding to prevent view
-   * from rendering under the System UI.
-   * For bigger apps the recommendation is to use `react-native-safe-area-context`:
-   * https://github.com/AppAndFlow/react-native-safe-area-context
-   *
-   * You can read more about it here:
-   * https://github.com/react-native-community/discussions-and-proposals/discussions/827
-   */
-  const safePadding = '5%';
-
-  return (
-    <View style={backgroundStyle}>
-      <StatusBar
-        barStyle={isDarkMode ? 'light-content' : 'dark-content'}
-        backgroundColor={backgroundStyle.backgroundColor}
-      />
-      <ScrollView
-        style={backgroundStyle}>
-        <View style={{paddingRight: safePadding}}>
-          <Header/>
-        </View>
-        <View
-          style={{
-            backgroundColor: isDarkMode ? Colors.black : Colors.white,
-            paddingHorizontal: safePadding,
-            paddingBottom: safePadding,
-          }}>
-          <Section title="Step One">
-            Edit <Text style={styles.highlight}>App.tsx</Text> to change this
-            screen and then come back to see your edits.
-          </Section>
-          <Section title="See Your Changes">
-            <ReloadInstructions />
-          </Section>
-          <Section title="Debug">
-            <DebugInstructions />
-          </Section>
-          <Section title="Learn More">
-            Read the docs to discover what to do next:
-          </Section>
-          <LearnMoreLinks />
-        </View>
-      </ScrollView>
-    </View>
+    <NavigationContainer>
+      <RootStack.Navigator initialRouteName={initialRoute} screenOptions={{ headerShown: false }}>
+        <RootStack.Screen name="Login" component={LoginScreen} />
+        <RootStack.Screen name="AdminApp" component={AdminTabNavigator} />
+        <RootStack.Screen name="ShipperApp" component={ShipperTabNavigator} />
+        <RootStack.Screen
+          name="shipperDetail"
+          component={ShipperDetailScreen}
+          options={{ headerShown: false, title: 'Chi tiết Shipper' }}
+        />
+      </RootStack.Navigator>
+    </NavigationContainer>
   );
 }
 
 const styles = StyleSheet.create({
-  sectionContainer: {
-    marginTop: 32,
-    paddingHorizontal: 24,
-  },
-  sectionTitle: {
-    fontSize: 24,
-    fontWeight: '600',
-  },
-  sectionDescription: {
-    marginTop: 8,
-    fontSize: 18,
-    fontWeight: '400',
-  },
-  highlight: {
-    fontWeight: '700',
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f8f9fa',
   },
 });
-
-export default App;
